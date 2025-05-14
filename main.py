@@ -1,136 +1,83 @@
-import pandas as pd
 import spacy
-import ast
 import re
-from experta import KnowledgeEngine, Fact, Rule
-import types
+from experta import *
 
 # ------------------ Load Models & Data ------------------
-
 nlp = spacy.load("en_core_web_sm")
 
-df = pd.read_csv(
-    r'Career Guidance Expert System.csv')
+# Define the career fields and their matching data
+career_fields = {
+    "Retail & Consumer Products": {
+        "required_skills": ["customer service", "sales", "inventory management", "merchandising", "product knowledge", "retail software", "negotiation", "marketing"],
+        "matching_keywords": ["store", "retail", "consumer products", "shopping", "merchandise", "customer service", "inventory"]
+    },
+    "Sales": {
+        "required_skills": ["sales strategy", "negotiation", "customer relationship management (CRM)", "communication", "product knowledge", "lead generation", "closing deals"],
+        "matching_keywords": ["sales", "selling", "negotiation", "CRM", "market research", "lead generation", "sales strategy"]
+    },
+    "Healthcare & Medical": {
+        "required_skills": ["patient care", "nursing", "medical knowledge", "first aid", "medication administration", "clinical skills", "hospital protocols", "healthcare technology", "diagnosis", "medical ethics"],
+        "matching_keywords": ["nurse", "doctor", "healthcare", "patient care", "hospital", "clinic", "medicine", "nursing", "health"]
+    },
+    "Telecommunication": {
+        "required_skills": ["network administration", "telecom infrastructure", "customer service", "telecommunication systems", "problem-solving", "project management"],
+        "matching_keywords": ["telecommunication", "network", "cellular", "wireless", "internet service", "call center", "data transmission"]
+    },
+    "Marketing": {
+        "required_skills": ["market research", "digital marketing", "social media management", "branding", "advertising", "SEO", "content marketing", "data analysis", "email marketing"],
+        "matching_keywords": ["advertisement", "marketing", "promotion", "branding", "social media", "digital marketing", "SEO", "market research"]
+    },
+    "Administration & Office Support": {
+        "required_skills": ["data entry", "scheduling", "customer service", "office management", "email communication", "file management", "event coordination", "office software"],
+        "matching_keywords": ["office", "administration", "data entry", "scheduling", "email", "reception", "management", "customer support"]
+    },
+    "Accounting": {
+        "required_skills": ["financial reporting", "budgeting", "taxation", "accounting software", "bookkeeping", "auditing", "financial analysis", "regulatory compliance"],
+        "matching_keywords": ["accounting", "finance", "bookkeeping", "audit", "tax", "budgeting", "financial reports"]
+    },
+    "Sport & Recreation": {
+        "required_skills": ["athletic training", "fitness", "coaching", "sports management", "team leadership", "event planning", "sports marketing", "nutrition"],
+        "matching_keywords": ["sports", "athletics", "fitness", "recreation", "coaching", "team leadership", "sports events"]
+    },
+    "Advertising, Arts & Media": {
+        "required_skills": ["creativity", "graphic design", "media planning", "public relations", "advertising", "content creation", "video production", "marketing"],
+        "matching_keywords": ["advertising", "arts", "media", "graphic design", "content creation", "public relations", "video production"]
+    }
+}
 
-
-# ---------- Helper Functions ----------
-
-def process_text_spacy(text):
-    doc = nlp(text.lower())
-    tokens = [token.text for token in doc]
-    lemmas = [token.lemma_ for token in doc]
-    return tokens, lemmas
-
-
-def parse_skills(skill_str):
-    try:
-        return ast.literal_eval(skill_str)
-    except:
-        return [s.strip() for s in skill_str.split(',')]
-
-
-unique_hard_skills = set()
-unique_soft_skills = set()
-
-for skills in df['hard_skill']:
-    unique_hard_skills.update(parse_skills(skills))
-for skills in df['soft_skill']:
-    unique_soft_skills.update(parse_skills(skills))
-
-hard_skill_dict = {skill.lower(): True for skill in unique_hard_skills}
-soft_skill_dict = {skill.lower(): True for skill in unique_soft_skills}
-
-print(f"Loaded {len(hard_skill_dict)} hard skills and {len(soft_skill_dict)} soft skills.")
-
-
-# ---------- Skill Extraction ----------
-
-def match_skill_in_text(skill, text):
-    pattern = r'\b' + re.escape(skill.lower()) + r'\b'
-    return re.search(pattern, text.lower()) is not None
-
-
-def extract_skills(user_input):
-    tokens, lemmas = process_text_spacy(user_input)
-
-    hard_skills = set()
-    soft_skills = set()
-
-    for skill in hard_skill_dict:
-        if match_skill_in_text(skill, user_input):
-            hard_skills.add(skill)
-
-    for skill in soft_skill_dict:
-        if match_skill_in_text(skill, user_input):
-            soft_skills.add(skill)
-
-    for lemma in lemmas:
-        if lemma in hard_skill_dict:
-            hard_skills.add(lemma)
-        if lemma in soft_skill_dict:
-            soft_skills.add(lemma)
-
-    return list(hard_skills), list(soft_skills)
-
-
-# ---------- Expert System ----------
-
+# ------------------- Experta Setup -------------------
 class CareerExpertSystem(KnowledgeEngine):
-    pass  # rules will be added dynamically
+    @DefFacts()
+    def _initial_action(self):
+        # Setup initial facts
+        yield Fact(action="find_career_field")
+    
+    @Rule(Fact(action='find_career_field'), salience=100)
+    def extract_skills(self):
+        # Extract skills from the input text (for simplicity, we will match keywords from the user input)
+        text_input = "I am good at selling products and negotiating with clients."
+        self.declare(Fact(text_input=text_input))
+    
+    @Rule(Fact(text_input=MATCH.text_input), salience=90)
+    def match_keywords_to_fields(self, text_input):
+        # Match input text to career fields
+        matched_fields = []
+        for field, data in career_fields.items():
+            for keyword in data["matching_keywords"]:
+                if re.search(r'\b' + re.escape(keyword) + r'\b', text_input.lower()):
+                    matched_fields.append(field)
+                    break
+        if matched_fields:
+            for field in matched_fields:
+                self.declare(Fact(matched_field=field))
+    
+    @Rule(Fact(matched_field=MATCH.field))
+    def output_field(self, field):
+        print(f"✅ Suitable career field: {field}")
+        print(f"Required skills for {field}: {', '.join(career_fields[field]['required_skills'])}")
+    
 
-
+# -------------------- Run the Expert System -------------------
 engine = CareerExpertSystem()
-
-
-def create_rule(hard_skills_row, soft_skills_row, candidate_field):
-    # Create conditions
-    condition_list = []
-    for hs in hard_skills_row:
-        condition_list.append(f"Fact(hard_skill='{hs.lower()}')")
-    for ss in soft_skills_row:
-        condition_list.append(f"Fact(soft_skill='{ss.lower()}')")
-
-    conditions = ', '.join(condition_list)
-
-    # Define rule function body
-    rule_code = f"""
-def _rule(self):
-    print("\\nRecommended field based on your skills: {candidate_field}")
-"""
-
-    exec(rule_code, globals(), locals())
-    rule_func = locals()['_rule']
-
-    # Attach rule to engine dynamically
-    rule_decorator = Rule(eval(conditions))
-    setattr(engine.__class__, f"recommend_{candidate_field.replace(' ', '_')}_{len(engine.facts)}",
-            rule_decorator(rule_func))
-
-
-# ---------- Dynamically Add Rules ----------
-
-for _, row in df[df['label'] == 1].iterrows():
-    hard_skills_row = parse_skills(row['hard_skill'])
-    soft_skills_row = parse_skills(row['soft_skill'])
-    create_rule(hard_skills_row, soft_skills_row, row['candidate_field'])
-
-print(f"Generated {len(engine.__class__.__dict__) - 1} rules from dataset.")  # exclude __module__
-
-# ---------- Example Input ----------
-
-user_input = "I have experience in nursing, registration, and service. I am also good at written communication."
-
-hard_skills, soft_skills = extract_skills(user_input)
-
-print("Extracted Hard Skills:", hard_skills)
-print("Extracted Soft Skills:", soft_skills)
-
-# ---------- Run Expert System ----------
-
-# Declare facts
-for hs in hard_skills:
-    engine.declare(Fact(hard_skill=hs))
-for ss in soft_skills:
-    engine.declare(Fact(soft_skill=ss))
-
-engine.run()
+engine.reset()  # Prepare the system
+engine.run()    # Run the inference engine
