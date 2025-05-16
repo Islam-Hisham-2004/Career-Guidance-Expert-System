@@ -1,31 +1,35 @@
+import streamlit as st
 import pandas as pd
-import spacy
 import ast
+import spacy
 import re
 from experta import KnowledgeEngine, Fact, Rule, DefFacts, MATCH
 from sklearn.utils import resample
+import time
 
-# ------------------ Load Models & Data ------------------
+# ------------------ Load NLP and Data ------------------
 
 nlp = spacy.load("en_core_web_sm")
-df = pd.read_csv('Career Guidance Expert System.csv')  # Your dataset file
 
-# ------------------ Balance Dataset ------------------
+@st.cache_data
+def load_data():
+    df = pd.read_csv("Career Guidance Expert System.csv")
 
-# Balance the dataset to avoid bias
-def get_balanced_df(df, samples_per_class=119):
-    balanced_frames = []
-    for field, group in df.groupby('candidate_field'):
-        if len(group) >= samples_per_class:
-            sampled = group.sample(n=samples_per_class, random_state=42)
-        else:
-            sampled = resample(group, replace=True, n_samples=samples_per_class, random_state=42)
-        balanced_frames.append(sampled)
-    return pd.concat(balanced_frames).reset_index(drop=True)
+    def get_balanced_df(df, samples_per_class=119):
+        balanced_frames = []
+        for field, group in df.groupby('candidate_field'):
+            if len(group) >= samples_per_class:
+                sampled = group.sample(n=samples_per_class, random_state=42)
+            else:
+                sampled = resample(group, replace=True, n_samples=samples_per_class, random_state=42)
+            balanced_frames.append(sampled)
+        return pd.concat(balanced_frames).reset_index(drop=True)
 
-balanced_df = get_balanced_df(df, samples_per_class=119)
+    return get_balanced_df(df)
 
-# ------------------ Helper Functions ------------------
+balanced_df = load_data()
+
+# ------------------ Skill Extraction ------------------
 
 def process_text_spacy(text):
     doc = nlp(text.lower())
@@ -39,7 +43,6 @@ def parse_skills(skill_str):
     except:
         return [s.strip() for s in skill_str.split(',')]
 
-# Extract unique skills
 unique_hard_skills = set()
 unique_soft_skills = set()
 for skills in balanced_df['hard_skill']:
@@ -49,10 +52,6 @@ for skills in balanced_df['soft_skill']:
 
 hard_skill_dict = {skill.lower(): True for skill in unique_hard_skills}
 soft_skill_dict = {skill.lower(): True for skill in unique_soft_skills}
-
-print(f"✅ Loaded {len(hard_skill_dict)} hard skills and {len(soft_skill_dict)} soft skills from balanced data.")
-
-# ------------------ Skill Extraction ------------------
 
 def match_skill_in_text(skill, text):
     pattern = r'\b' + re.escape(skill.lower()) + r'\b'
@@ -86,6 +85,7 @@ class CareerExpertSystem(KnowledgeEngine):
         self.user_text = user_text
         self.career_scores = {}
         self.field_counts = balanced_df['candidate_field'].value_counts().to_dict()
+        self.result = ""
 
     @DefFacts()
     def _initial_action(self):
@@ -98,7 +98,7 @@ class CareerExpertSystem(KnowledgeEngine):
 
     @Rule(Fact(text_input=MATCH.text_input), salience=90)
     def analyze_text(self, text_input):
-        print(f"\n📝 Analyzing user input: {text_input}")
+        pass
 
     @Rule(Fact(hard_skill=MATCH.skill))
     def match_career_by_hard_skill(self, skill):
@@ -122,30 +122,48 @@ class CareerExpertSystem(KnowledgeEngine):
                 for field, score in self.career_scores.items()
             }
             best_career = max(normalized_scores, key=normalized_scores.get)
-            print(f"\n✅ Recommended Career Field Based on Your Skills: {best_career}")
-            print(f"🔢 Raw Score: {self.career_scores[best_career]}")
-            print(f"⚖️ Normalized Score: {normalized_scores[best_career]:.4f}")
+
+            self.result = (
+                f"### 🎯 Recommended Career Field\n"
+                f"##  {best_career}"
+            )
+
+            with st.expander("📊 More details"):
+                st.write(f"🔢 Raw Score: {self.career_scores[best_career]}  _(Matching rows)_")
+                st.write(f"⚖️ Normalized Score: {normalized_scores[best_career]:.4f}  _(Adjusted by field size)_")
+                st.write("💼 Hard Skills Matched:", self.user_hard_skills)
+                st.write("🧠 Soft Skills Matched:", self.user_soft_skills)
         else:
-            print("\n❌ Sorry, no matching career field found based on your skills.")
+            self.result = "❌ No matching career field found."
 
-# ------------------ Main Program ------------------
+# ------------------ Streamlit GUI ------------------
 
-if __name__ == "__main__":
-    user_input = (
-        "I enjoy planning promotional campaigns, managing social media content, and analyzing customer behavior. I'm creative, detail-oriented, and good at communication and branding."
-    )
+st.title("Career Guidance Expert System")
 
-    hard_skills, soft_skills = extract_skills(user_input)
+user_input = st.text_area(f"## 📝 Describe your skills and interests:")
 
-    print(f"\n🧠 Extracted Hard Skills: {hard_skills}")
-    print(f"🧠 Extracted Soft Skills: {soft_skills}")
+status = st.empty()
+result_container = st.empty()
 
-    engine = CareerExpertSystem(user_text=user_input)
-    engine.reset()
+if st.button("Find"):
+    if user_input.strip():
+        hard_skills, soft_skills = extract_skills(user_input)
 
-    for hs in hard_skills:
-        engine.declare(Fact(hard_skill=hs))
-    for ss in soft_skills:
-        engine.declare(Fact(soft_skill=ss))
+        engine = CareerExpertSystem(user_text=user_input)
+        engine.user_hard_skills = hard_skills
+        engine.user_soft_skills = soft_skills
 
-    engine.run()
+        status.write("⏳ Analyzing...")
+        time.sleep(1)
+
+        engine.reset()
+        for hs in hard_skills:
+            engine.declare(Fact(hard_skill=hs))
+        for ss in soft_skills:
+            engine.declare(Fact(soft_skill=ss))
+        engine.run()
+
+        status.empty()
+        result_container.markdown(engine.result)
+    else:
+        st.warning("⚠️ Please enter your input first.")
